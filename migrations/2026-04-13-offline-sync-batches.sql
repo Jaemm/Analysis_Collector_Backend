@@ -1,0 +1,3 @@
+ALTER TABLE analysis_batches
+  ADD COLUMN IF NOT EXISTS sync_status TEXT DEFAULT 'created',
+  ADD COLUMN IF NOT EXISTS synced_at TIMESTAMPTZ;

@@ -1,0 +1,67 @@
+name: Deploy Staging
+
+on:
+  push:
+    branches:
+      - stg_main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Prepare SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.STG_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "${{ vars.STG_PORT }}" -H "${{ vars.STG_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy to staging
+        env:
+          DEPLOY_PATH: ${{ vars.STG_PATH }}
+          DEPLOY_USER: ${{ vars.STG_USER }}
+          DEPLOY_HOST: ${{ vars.STG_HOST }}
+          DEPLOY_PORT: ${{ vars.STG_PORT }}
+        run: |
+          # Keep server-managed environment files out of the sync target.
+          rsync -az --delete \
+            --exclude='.git/' \
+            --exclude='node_modules/' \
+            --exclude='.env' \
+            --exclude='.env.development' \
+            --exclude='.env.production' \
+            --exclude='.env.staging' \
+            --exclude='.env.local' \
+            --exclude='.env.development.local' \
+            --exclude='.env.test.local' \
+            --exclude='.env.production.local' \
+            -e "ssh -i ~/.ssh/id_rsa -p ${DEPLOY_PORT}" \
+            ./ "${DEPLOY_USER}@${DEPLOY_HOST}:${DEPLOY_PATH}/"
+          ssh -i ~/.ssh/id_rsa -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" "DEPLOY_PATH='${DEPLOY_PATH}' bash -seuo pipefail -s" <<'EOF'
+          cd "${DEPLOY_PATH}"
+          npm ci
+          npm run build
+          pm2 startOrRestart ecosystem.config.js --env staging --update-env
+          pm2 save
+          EOF
